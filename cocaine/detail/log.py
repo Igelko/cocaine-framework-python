@@ -25,6 +25,7 @@ import logging
 # to support Zipkin
 cocainelog = logging.getLogger("cocaine")
 cocainelog.propagate = False
+cocainelog.setLevel(logging.ERROR)
 
 servicelog = logging.getLogger("cocaine.baseservice")
 workerlog = logging.getLogger("cocaine.worker")

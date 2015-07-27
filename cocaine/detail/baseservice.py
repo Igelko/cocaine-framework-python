@@ -24,6 +24,7 @@ import logging
 import weakref
 
 from tornado.gen import Return
+from tornado.gen import WaitIterator
 from tornado.ioloop import IOLoop
 from tornado.tcpclient import TCPClient
 
@@ -81,21 +82,43 @@ class BaseService(object):
             if self._connected:
                 return
 
-            for host, port in self.endpoints:
+            def cancellation(fut):
                 try:
-                    self.log.info("trying %s:%d to establish connection %s", host, port, self.name)
-                    self.pipe = yield TCPClient(io_loop=self.io_loop).connect(host, port)
+                    pipe = fut.result()
+                    pipe.close()
+                except Exception:
+                    pass
+
+            futures = list()
+            for host, port in self.endpoints:
+                self.log.info("%s is trying to establish connection to %s:%d", self.name, host, port)
+                futures.append(TCPClient(io_loop=self.io_loop).connect(host, port))
+
+            errors = {}
+
+            connectors = WaitIterator(*futures)
+            while not connectors.done():
+                try:
+                    self.pipe = yield connectors.next()
                     self.pipe.set_nodelay(True)
                     self.pipe.read_until_close(callback=functools.partial(weak_wrapper, weakref.ref(self), "on_close"),
                                                streaming_callback=functools.partial(weak_wrapper, weakref.ref(self), "on_read"))
-                except Exception as err:
-                    self.log.error("connection error %s", err)
-                else:
-                    self.address = (host, port)
-                    self.log.debug("connection has been established successfully")
-                    return
 
-            raise Exception("unable to establish connection")
+                    self.address = self.endpoints[connectors.current_index]
+                    self.log.debug("connection has been established successfully to %s:%d", self.address)
+                    futures.remove(connectors.current_future)
+                    # we have to close the other connections if they are established
+                    for fut in futures:
+                        fut.add_done_callback(cancellation)
+                    return
+                except Exception as err:
+                    h, p = self.endpoints[connectors.current_index]
+                    self.log.error("connection error to %s:%d: %s", h, p, err)
+                    errors[(h, p)] = err
+                    futures.remove(connectors.current_future)
+
+            error_msg = ", ".join("%s:%d %s" % (addr[0], addr[1], msg) for addr, msg in errors.items())
+            raise Exception("unable to establish connection: %s" % error_msg)
 
     def disconnect(self):
         self.log.debug("disconnect has been called %s", self.name)

@@ -98,6 +98,14 @@ def test_service_connection_failure():
     io.run_sync(s.connect)
 
 
+def test_service_connectors():
+    io = IOLoop.current()
+    s = BaseService(name="dummy", endpoints=[["localhost", 43000]], io_loop=io)
+    s.endpoints.append(("localhost", 10053))
+    s.endpoints.append(("8.8.8.8", 80))
+    io.run_sync(s.connect)
+
+
 @tools.raises(InvalidApiVersion)
 def test_service_invalid_api_version():
     io = IOLoop.current()
